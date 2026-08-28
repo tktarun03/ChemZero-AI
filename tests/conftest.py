@@ -24,9 +24,12 @@ def sample_df() -> pd.DataFrame:
 def trained(sample_df: pd.DataFrame):
     """A model trained on the small dataset, plus its metrics.
 
-    Kept small (20 trees, no CV) so the whole suite stays fast.
+    Kept small (20 trees, no CV, no baseline ladder) so the whole suite stays
+    fast. The ladder is exercised separately in test_baselines.py.
     """
-    return train_and_evaluate(sample_df, n_estimators=20, cv_folds=0)
+    return train_and_evaluate(
+        sample_df, n_estimators=20, cv_folds=0, run_baselines=False
+    )
 
 
 @pytest.fixture(scope="session")

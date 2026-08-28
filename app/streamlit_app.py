@@ -25,20 +25,28 @@ from src.config import (  # noqa: E402
     DEFAULT_OPERATING_HOURS_PER_YEAR,
     FEATURE_LABELS,
     FEATURES,
+    FEATURES_NOT_IN_TARGET,
     SAFETY_NOTICE,
     TARGET,
 )
 from src.optimization import MAX_POWER_PRICE_PER_KWH, WEIGHTS, rank_scenarios  # noqa: E402
 from src.predict import (  # noqa: E402
     ModelNotTrainedError,
+    calibration_from_metrics,
     load_metrics,
     load_model,
-    predict_recovery,
+    predict_with_interval,
     sweep_feature,
 )
 from src.process_model import ProcessInput, evaluate_process  # noqa: E402
 from src.safety_constraints import Severity, evaluate_demo_safety  # noqa: E402
-from src.viz import importance_bar, scenario_bar, sensitivity_line, theme_for  # noqa: E402
+from src.viz import (  # noqa: E402
+    emphasis_bar,
+    importance_bar,
+    scenario_bar,
+    sensitivity_line,
+    theme_for,
+)
 
 st.set_page_config(page_title="ChemZero-AI", page_icon="⚗️", layout="wide")
 
@@ -157,7 +165,14 @@ if model_error:
 # Recovery fraction: model prediction or manual
 # --------------------------------------------------------------------------
 
-predicted_recovery = predict_recovery(model, feature_inputs) if model is not None else None
+calibration = calibration_from_metrics(metrics)
+if model is not None:
+    predicted_recovery, interval_low, interval_high = predict_with_interval(
+        model, feature_inputs, calibration
+    )
+else:
+    predicted_recovery = interval_low = interval_high = None
+
 recovery = predicted_recovery if (use_model and predicted_recovery is not None) else manual_recovery
 
 result = evaluate_process(
@@ -181,7 +196,16 @@ if predicted_recovery is not None and not use_model:
     delta = f"{(manual_recovery - predicted_recovery):+.1%} vs model"
 
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("Recovery fraction", f"{recovery:.1%}", delta=delta, delta_color="off", help=f"Source: {source_label}")
+k1.metric(
+    "Recovery fraction",
+    f"{recovery:.1%}",
+    delta=delta,
+    delta_color="off",
+    help=f"Source: {source_label}",
+)
+if use_model and interval_low is not None:
+    confidence = int((1 - calibration.alpha) * 100)
+    k1.caption(f"{confidence}% interval: {interval_low:.1%} – {interval_high:.1%}")
 k2.metric("Recovered gas", f"{result['recovered_gas_nm3_h']:,.0f} Nm³/h")
 k3.metric("Recovered energy", f"{result['annual_recovered_energy_mwh']:,.0f} MWh/y")
 k4.metric("Illustrative avoided CO₂", f"{result['estimated_avoided_co2_t_y']:,.0f} t/y")
@@ -383,19 +407,123 @@ with model_tab:
         m3.metric("RMSE", f"{metrics['rmse']:.4f}")
         m4.metric("CV R²", f"{metrics['cv_r2_mean']:.3f} ± {metrics['cv_r2_std']:.3f}")
         st.caption(
-            f"Random forest, {metrics['n_estimators']} trees, trained on "
-            f"{metrics['n_train']} rows and scored on {metrics['n_test']} held out "
-            f"({metrics['trained_at_utc']}). These scores say the model reproduced "
-            "the formula that generated the data. They say nothing about a real process."
+            f"Estimator `{metrics.get('model_kind', 'rf')}`, trained on "
+            f"{metrics['n_train']} rows, calibrated on {metrics['n_calibration']}, "
+            f"scored on {metrics['n_test']} held out ({metrics['trained_at_utc']}). "
+            "These scores say the model reproduced the formula that generated the "
+            "data. They say nothing about a real process."
         )
 
+        # -- Is the complexity earning its keep? ---------------------------
+        baselines = metrics.get("baselines") or []
+        if baselines:
+            st.divider()
+            st.subheader("Is the complexity earning its keep?")
+            best = baselines[0]
+            st.altair_chart(
+                emphasis_bar(
+                    labels=[row["name"] for row in baselines],
+                    values=[row["cv_r2_mean"] for row in baselines],
+                    leader_index=0,
+                    x_title="Cross-validated R² (higher is better)",
+                    theme=theme,
+                    value_format="+.3f",
+                ),
+                width="stretch",
+            )
+
+            if best["name"] != "Random forest" and metrics.get("model_kind") == "rf":
+                st.warning(
+                    f"**{best['name']}** scores higher than the random forest "
+                    "currently loaded. The target was generated from a nearly "
+                    "linear formula, so the simpler model fits it better — and it "
+                    "is smaller, faster, and directly interpretable. Retrain with "
+                    "`python src/train_model.py --model linear` to switch.",
+                    icon="📉",
+                )
+
+            st.dataframe(
+                pd.DataFrame(baselines)[["name", "cv_r2_mean", "cv_r2_std", "note"]].rename(
+                    columns={
+                        "name": "Model",
+                        "cv_r2_mean": "CV R²",
+                        "cv_r2_std": "± std",
+                        "note": "What it is",
+                    }
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+            st.caption(
+                "Every candidate is scored the same way, on the same folds. A model "
+                "that cannot beat \"Mean (no model)\" has learned nothing at all."
+            )
+
+        # -- Uncertainty ----------------------------------------------------
+        conformal = metrics.get("conformal") or {}
+        if conformal:
+            st.divider()
+            st.subheader("How much to trust one prediction")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Interval half-width", f"±{conformal['quantile']:.4f}")
+            c2.metric("Target coverage", f"{conformal['confidence']:.0%}")
+            c3.metric("Measured coverage", f"{conformal['empirical_coverage']:.1%}")
+            st.caption(
+                f"Split conformal prediction, calibrated on {conformal['n_calibration']} "
+                "points the model never trained on. Measured coverage is the fraction "
+                "of held-out points that actually landed inside the interval — it "
+                "should sit near the target. The guarantee needs no assumption about "
+                "the shape of the errors, but it does assume new inputs resemble the "
+                "training data, which is exactly what fails when a model meets an "
+                "operating regime it has never seen."
+            )
+
+        # -- What the model leans on ---------------------------------------
+        st.divider()
         st.subheader("What the model leans on")
-        st.altair_chart(importance_bar(metrics["feature_importances"], FEATURE_LABELS, theme), width="stretch")
-        st.caption(
-            "Impurity-based importances from the forest. They reflect the invented "
-            "correlation in `generate_data.py`: methane fraction and CO₂ dominate "
-            "because that is how the target was written."
-        )
+
+        permutation = metrics.get("permutation_importances") or {}
+        impurity = metrics.get("impurity_importances") or {}
+
+        if permutation:
+            st.altair_chart(importance_bar(permutation, FEATURE_LABELS, theme), width="stretch")
+            st.caption(
+                "**Permutation importance**, measured on held-out data: how much "
+                "worse the model gets when one feature is shuffled. It works for any "
+                "estimator and does not reward a feature merely for having many "
+                "possible split points."
+            )
+
+        if impurity and permutation:
+            comparison = pd.DataFrame(
+                {
+                    "Feature": [FEATURE_LABELS.get(f, f) for f in FEATURES],
+                    "Permutation": [permutation.get(f, 0.0) for f in FEATURES],
+                    "Impurity (built-in)": [impurity.get(f, 0.0) for f in FEATURES],
+                    "In the target formula?": [
+                        "no" if f in FEATURES_NOT_IN_TARGET else "yes" for f in FEATURES
+                    ],
+                }
+            ).sort_values("Permutation", ascending=False)
+            st.dataframe(comparison, hide_index=True, width="stretch")
+
+            inflated = [
+                FEATURE_LABELS.get(f, f)
+                for f in FEATURES_NOT_IN_TARGET
+                if impurity.get(f, 0.0) > 0.01
+            ]
+            if inflated:
+                st.info(
+                    "**Why two columns?** The forest's built-in impurity importance "
+                    f"assigns non-trivial weight to {', '.join(inflated)} — variables "
+                    "the data generator never put in the target formula. Impurity "
+                    "importance is biased toward continuous, high-cardinality "
+                    "features, which get many split points to fit noise with. "
+                    "Permutation importance correctly scores them at roughly zero. "
+                    "This repo has a rare luxury: we wrote the formula, so we know "
+                    "which column is right.",
+                    icon="🔍",
+                )
 
     st.divider()
     st.subheader("Synthetic dataset")
@@ -417,15 +545,18 @@ with learn_tab:
         """
 1. **`src/generate_data.py`** draws synthetic operating points and computes a
    target recovery fraction from a hand-written correlation plus noise.
-2. **`src/train_model.py`** fits a random forest to that data and records
-   held-out and cross-validated scores.
-3. **`src/predict.py`** loads the fitted model and predicts a recovery fraction
-   for whatever the sidebar is set to.
-4. **`src/process_model.py`** turns that fraction into recovered gas, energy,
+2. **`src/train_model.py`** fits a model, compares it against a ladder of
+   simpler baselines, and splits off a calibration set it never trains on.
+3. **`src/baselines.py`** answers "is the complex model worth it?" every run.
+4. **`src/uncertainty.py`** turns the point prediction into a conformal
+   interval using that calibration set.
+5. **`src/predict.py`** loads the fitted model and predicts a recovery fraction,
+   with its interval, for whatever the sidebar is set to.
+6. **`src/process_model.py`** turns that fraction into recovered gas, energy,
    and an illustrative avoided-CO₂ figure.
-5. **`src/optimization.py`** scores four end-use scenarios with a transparent
+7. **`src/optimization.py`** scores four end-use scenarios with a transparent
    weighted sum.
-6. **`src/safety_constraints.py`** range-checks the inputs and raises teaching
+8. **`src/safety_constraints.py`** range-checks the inputs and raises teaching
    flags.
         """
     )
@@ -442,6 +573,10 @@ with learn_tab:
 - **The screening is not process safety.** No hazard model, no site data, no
   standards. Real screening is HAZOP/LOPA plus qualified review.
 - **Sensitivity is one-at-a-time.** Interactions between variables are ignored.
+- **The interval is conditional on the data looking familiar.** Conformal
+  coverage holds while new inputs resemble the calibration set. Push the sliders
+  somewhere the training data never went and the guarantee quietly lapses -
+  without the interval widening to tell you.
         """
     )
     st.warning(

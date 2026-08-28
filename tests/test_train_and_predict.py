@@ -8,15 +8,19 @@ import joblib
 import pandas as pd
 import pytest
 
-from src.config import FEATURES
+from src.config import FEATURES, FEATURES_NOT_IN_TARGET
+from src.config import TARGET
 from src.predict import (
     ModelNotTrainedError,
+    calibration_from_metrics,
     load_metrics,
     load_model,
     predict_recovery,
     predict_recovery_batch,
+    predict_with_interval,
     sweep_feature,
 )
+from src.uncertainty import calibrate
 from src.train_model import MissingColumnsError, load_dataset, main, train_and_evaluate
 
 
@@ -28,7 +32,9 @@ def test_metrics_are_populated(trained):
     assert 0.0 <= metrics.r2 <= 1.0
     assert metrics.mae > 0
     assert metrics.rmse >= metrics.mae  # RMSE can never be below MAE
-    assert metrics.n_train + metrics.n_test == 300
+    # Three-way split: train + calibration + test accounts for every row.
+    assert metrics.n_train + metrics.n_calibration + metrics.n_test == 300
+    assert metrics.n_calibration > 0
 
 
 def test_model_beats_predicting_the_mean(trained):
@@ -37,22 +43,48 @@ def test_model_beats_predicting_the_mean(trained):
     assert metrics.r2 > 0.0
 
 
-def test_importances_cover_every_feature_and_sum_to_one(trained):
+def test_impurity_importances_cover_every_feature_and_sum_to_one(trained):
     _, metrics = trained
-    assert set(metrics.feature_importances) == set(FEATURES)
-    assert sum(metrics.feature_importances.values()) == pytest.approx(1.0, abs=1e-3)
+    assert set(metrics.impurity_importances) == set(FEATURES)
+    assert sum(metrics.impurity_importances.values()) == pytest.approx(1.0, abs=1e-3)
 
 
-def test_importances_are_sorted_descending(trained):
+def test_both_importance_kinds_are_sorted_descending(trained):
     _, metrics = trained
-    values = list(metrics.feature_importances.values())
-    assert values == sorted(values, reverse=True)
+    for importances in (metrics.impurity_importances, metrics.permutation_importances):
+        values = list(importances.values())
+        assert values == sorted(values, reverse=True)
+
+
+def test_permutation_importances_cover_every_feature(trained):
+    _, metrics = trained
+    assert set(metrics.permutation_importances) == set(FEATURES)
 
 
 def test_methane_is_a_top_driver(trained):
     """The generator gives methane the biggest coefficient; the model should see it."""
     _, metrics = trained
-    assert list(metrics.feature_importances)[0] == "methane_fraction"
+    assert list(metrics.permutation_importances)[0] == "methane_fraction"
+
+
+def test_permutation_scores_absent_features_near_zero(trained):
+    """The control group: variables the target formula never used.
+
+    Permutation importance should place them at essentially zero. This is the
+    check that justifies preferring it over the forest's built-in importance.
+    """
+    _, metrics = trained
+    for feature in FEATURES_NOT_IN_TARGET:
+        assert metrics.permutation_importances[feature] < 0.02
+
+
+def test_linear_model_has_no_impurity_importances(sample_df):
+    """Only tree models expose feature_importances_; the field stays empty."""
+    _, metrics = train_and_evaluate(
+        sample_df, model_kind="linear", cv_folds=0, run_baselines=False
+    )
+    assert metrics.impurity_importances == {}
+    assert set(metrics.permutation_importances) == set(FEATURES)
 
 
 def test_training_is_reproducible(sample_df):
@@ -204,16 +236,67 @@ def test_cli_writes_model_and_metrics(tmp_path, sample_df):
         "--metrics-out", str(metrics_out),
         "--n-estimators", "10",
         "--cv-folds", "0",
+        "--skip-baselines",
     ])
 
     assert exit_code == 0
     assert model_out.exists()
     payload = json.loads(metrics_out.read_text(encoding="utf-8"))
     assert payload["n_estimators"] == 10
-    assert set(payload["feature_importances"]) == set(FEATURES)
+    assert set(payload["permutation_importances"]) == set(FEATURES)
+    assert payload["conformal"]["quantile"] > 0
+
+
+def test_cli_rejects_an_unknown_model_kind(tmp_path, sample_df, capsys):
+    data = tmp_path / "data.csv"
+    sample_df.to_csv(data, index=False)
+    with pytest.raises(SystemExit):
+        main(["--data", str(data), "--model", "not_a_model"])
 
 
 def test_cli_reports_a_missing_dataset_without_traceback(tmp_path, capsys):
     exit_code = main(["--data", str(tmp_path / "absent.csv")])
     assert exit_code == 1
     assert "generate_data" in capsys.readouterr().err
+
+
+# --- conformal intervals through the public API --------------------------
+
+
+def test_calibration_round_trips_through_metrics(tmp_path, sample_df):
+    """The dashboard rebuilds the calibration from JSON; that path must work."""
+    data = tmp_path / "data.csv"
+    sample_df.to_csv(data, index=False)
+    metrics_out = tmp_path / "m.json"
+
+    main([
+        "--data", str(data),
+        "--model-out", str(tmp_path / "m.joblib"),
+        "--metrics-out", str(metrics_out),
+        "--n-estimators", "10",
+        "--cv-folds", "0",
+        "--skip-baselines",
+    ])
+
+    calibration = calibration_from_metrics(load_metrics(metrics_out))
+    assert calibration is not None
+    assert calibration.quantile > 0
+    assert calibration.confidence == pytest.approx(0.9)
+
+
+def test_no_calibration_block_yields_no_interval(model, base_inputs):
+    prediction, low, high = predict_with_interval(model, base_inputs, None)
+    assert low is None and high is None
+    assert 0.0 <= prediction <= 1.0
+
+
+def test_interval_brackets_the_prediction(model, base_inputs, sample_df):
+    calibration = calibrate(model, sample_df.head(60), sample_df[TARGET].head(60))
+    prediction, low, high = predict_with_interval(model, base_inputs, calibration)
+    assert low <= prediction <= high
+
+
+def test_calibration_from_metrics_handles_missing_input():
+    assert calibration_from_metrics(None) is None
+    assert calibration_from_metrics({}) is None
+    assert calibration_from_metrics({"conformal": {}}) is None

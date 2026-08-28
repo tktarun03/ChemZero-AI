@@ -25,7 +25,16 @@ from typing import Any, Mapping, Sequence
 import altair as alt
 import pandas as pd
 
-__all__ = ["Theme", "LIGHT", "DARK", "theme_for", "sensitivity_line", "importance_bar", "scenario_bar"]
+__all__ = [
+    "Theme",
+    "LIGHT",
+    "DARK",
+    "theme_for",
+    "sensitivity_line",
+    "importance_bar",
+    "scenario_bar",
+    "emphasis_bar",
+]
 
 
 @dataclass(frozen=True)
@@ -186,6 +195,63 @@ def importance_bar(
     return _style(alt.layer(bars, text).properties(height=height, width="container"), theme)
 
 
+def emphasis_bar(
+    labels: Sequence[str],
+    values: Sequence[float],
+    leader_index: int,
+    x_title: str,
+    theme: Theme,
+    value_format: str = ".3f",
+    height: int = 200,
+) -> alt.Chart:
+    """Horizontal bars with exactly one bar emphasised.
+
+    The emphasis form: the leader carries the accent hue and everything else
+    recedes to grey. Use it when the story is "this one leads" rather than
+    "here are four competing identities" - which is the case for both the
+    scenario ranking and the baseline ladder.
+
+    Args:
+        labels: Bar labels, in the order given.
+        values: Bar values, parallel to ``labels``.
+        leader_index: Index of the bar to emphasise.
+        x_title: Axis label for the value.
+        theme: Colour roles for the current surface.
+        value_format: d3 format for the direct labels.
+        height: Chart height in pixels.
+
+    Returns:
+        A configured Altair chart.
+    """
+    df = pd.DataFrame(
+        {
+            "label": list(labels),
+            "value": list(values),
+            "leader": [i == leader_index for i in range(len(labels))],
+        }
+    )
+
+    base = alt.Chart(df).encode(
+        y=alt.Y("label:N", sort=list(labels), title=None),
+        x=alt.X("value:Q", title=x_title),
+    )
+    bars = base.mark_bar(height=16, cornerRadiusEnd=4).encode(
+        color=alt.condition(
+            alt.datum.leader, alt.value(theme.series), alt.value(theme.muted_series)
+        ),
+        tooltip=[
+            alt.Tooltip("label:N", title="Model"),
+            alt.Tooltip("value:Q", title=x_title, format=value_format),
+        ],
+    )
+    # Negative bars need their label on the other side, or it overlaps the axis.
+    text = base.mark_text(
+        align="left", dx=6, color=theme.text_muted, fontSize=11
+    ).encode(text=alt.Text("value:Q", format=value_format))
+
+    return _style(alt.layer(bars, text).properties(height=height, width="container"), theme)
+
+
 def scenario_bar(
     ranked: Sequence[Mapping[str, Any]],
     theme: Theme,
@@ -197,35 +263,22 @@ def scenario_bar(
     the point of the chart is which one leads, not four competing identities.
 
     Args:
-        ranked: Output of :func:`src.optimization.rank_scenarios`.
+        ranked: Output of :func:`src.optimization.rank_scenarios`, best first.
         theme: Colour roles for the current surface.
         height: Chart height in pixels.
 
     Returns:
         A configured Altair chart.
     """
-    df = pd.DataFrame(
-        {
-            "name": [row["name"] for row in ranked],
-            "score": [row["score"] for row in ranked],
-            "leader": [row.get("rank") == 1 for row in ranked],
-        }
+    leader = next(
+        (i for i, row in enumerate(ranked) if row.get("rank") == 1), 0
     )
-
-    base = alt.Chart(df).encode(
-        y=alt.Y("name:N", sort=alt.EncodingSortField("score", order="descending"), title=None),
-        x=alt.X("score:Q", title="Toy score (higher = better fit to the weights)"),
+    return emphasis_bar(
+        labels=[row["name"] for row in ranked],
+        values=[row["score"] for row in ranked],
+        leader_index=leader,
+        x_title="Toy score (higher = better fit to the weights)",
+        theme=theme,
+        value_format=".2f",
+        height=height,
     )
-    bars = base.mark_bar(height=16, cornerRadiusEnd=4).encode(
-        color=alt.condition(
-            alt.datum.leader, alt.value(theme.series), alt.value(theme.muted_series)
-        ),
-        tooltip=[
-            alt.Tooltip("name:N", title="Scenario"),
-            alt.Tooltip("score:Q", title="Score", format=".3f"),
-        ],
-    )
-    text = base.mark_text(align="left", dx=6, color=theme.text_muted, fontSize=11).encode(
-        text=alt.Text("score:Q", format=".2f")
-    )
-    return _style(alt.layer(bars, text).properties(height=height, width="container"), theme)

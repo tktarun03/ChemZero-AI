@@ -14,12 +14,15 @@ from typing import Any, Mapping
 import pandas as pd
 
 from src.config import FEATURES, METRICS_PATH, MODEL_PATH
+from src.uncertainty import ConformalCalibration, interval_for
 
 __all__ = [
     "ModelNotTrainedError",
     "load_model",
     "load_metrics",
+    "calibration_from_metrics",
     "predict_recovery",
+    "predict_with_interval",
     "predict_recovery_batch",
     "sweep_feature",
 ]
@@ -156,3 +159,57 @@ def sweep_feature(
             "predicted_recovery_fraction": predict_recovery_batch(model, frame),
         }
     )
+
+
+def calibration_from_metrics(metrics: dict[str, Any] | None) -> ConformalCalibration | None:
+    """Rebuild the conformal calibration recorded during training.
+
+    The quantile lives in ``model_metrics.json`` rather than inside the model
+    file, which keeps ``recovery_model.joblib`` a plain scikit-learn estimator
+    that anything can load.
+
+    Args:
+        metrics: Output of :func:`load_metrics`, or None.
+
+    Returns:
+        The calibration, or None when training recorded no conformal block
+        (for example when ``--calibration-size 0`` was used).
+    """
+    if not metrics:
+        return None
+    block = metrics.get("conformal") or {}
+    if "quantile" not in block:
+        return None
+    return ConformalCalibration(
+        quantile=float(block["quantile"]),
+        alpha=float(block["alpha"]),
+        n_calibration=int(block["n_calibration"]),
+    )
+
+
+def predict_with_interval(
+    model: Any,
+    inputs: Mapping[str, float],
+    calibration: ConformalCalibration | None,
+) -> tuple[float, float | None, float | None]:
+    """Predict a recovery fraction with a conformal interval.
+
+    Args:
+        model: A fitted estimator from :func:`load_model`.
+        inputs: Mapping containing every name in :data:`src.config.FEATURES`.
+        calibration: From :func:`calibration_from_metrics`; None disables the
+            interval.
+
+    Returns:
+        ``(prediction, low, high)``. ``low`` and ``high`` are None when no
+        calibration is available - an unknown interval is reported as unknown
+        rather than silently as zero width.
+
+    Raises:
+        KeyError: If a required feature is missing.
+    """
+    prediction = predict_recovery(model, inputs)
+    if calibration is None:
+        return prediction, None, None
+    low, high = interval_for(prediction, calibration)
+    return prediction, low, high

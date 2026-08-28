@@ -50,24 +50,30 @@ in one Streamlit dashboard.
 | Educational input screening with graded flags | [`src/safety_constraints.py`](src/safety_constraints.py) |
 | Scenario comparison with a transparent weighted score | [`src/optimization.py`](src/optimization.py) |
 | Model training, cross-validation, metrics export | [`src/train_model.py`](src/train_model.py) |
+| Baseline ladder — *is the complex model worth it?* | [`src/baselines.py`](src/baselines.py) |
+| Conformal prediction intervals | [`src/uncertainty.py`](src/uncertainty.py) |
 | Loading the model and predicting on new inputs | [`src/predict.py`](src/predict.py) |
 | Chart builders (single-hue, emphasis, no dual axes) | [`src/viz.py`](src/viz.py) |
 | Interactive dashboard | [`app/streamlit_app.py`](app/streamlit_app.py) |
-| Test suite (94 tests) | [`tests/`](tests/) |
+| Test suite (128 tests) | [`tests/`](tests/) |
 
 ## How the pieces fit together
 
 ```
   generate_data.py          train_model.py             predict.py
   ────────────────          ──────────────             ──────────
-  draws random              fits a random forest       loads the model,
-  operating points          on that CSV, writes        predicts a recovery
-  and computes a       ──>  recovery_model.joblib  ──> fraction for whatever
-  target recovery           + model_metrics.json       the sidebar is set to
-  from a hand-written
-  correlation + noise                                        │
-         │                                                   │
-         └──> data/synthetic_process_data.csv                ▼
+  draws random              splits train/calib/test,   loads the model,
+  operating points          fits a model, ranks it     predicts a recovery
+  and computes a       ──>  against simpler        ──> fraction + a conformal
+  target recovery           baselines, calibrates       interval for whatever
+  from a hand-written       a conformal interval        the sidebar is set to
+  correlation + noise
+         │                  baselines.py  uncertainty.py      │
+         │                  ────────────  ──────────────      │
+         │                  is complexity  turns a point      │
+         │                  worth it?      into an interval   │
+         │                                                    │
+         └──> data/synthetic_process_data.csv                 ▼
                                                    process_model.py
                                                    ────────────────
                                                    recovery fraction ->
@@ -207,28 +213,54 @@ python src/train_model.py
 Expected output (your numbers will match if you used the default dataset):
 
 ```
-Rows         : 1500 (1200 train / 300 test)
-MAE          : 0.0237
-RMSE         : 0.0304
-R2           : 0.7464
+Model        : rf
+Rows         : 1500 (960 train / 240 calibration / 300 test)
+MAE          : 0.0241
+RMSE         : 0.0307
+R2           : 0.7397
 CV R2        : 0.7218 +/- 0.0163 (5 folds)
+Conformal    : +/-0.0560 for 90% coverage (measured 92.7% on the test split)
 Top drivers  : methane_fraction, co2_fraction, h2s_ppm
+
+Baseline ladder (cross-validated R2, best first):
+  Linear regression    +0.7551 +/- 0.0178  <-- best
+  Ridge (alpha=1)      +0.7551 +/- 0.0177
+  Random forest        +0.7218 +/- 0.0163
+  Mean (no model)      -0.0022 +/- 0.0026
+
+  NOTE: 'Linear regression' scores higher than the random forest you just trained.
+        The target was generated from a nearly linear formula, so the
+        simpler model fits it better. Try: --model linear
+
 Saved model  : ...\data\recovery_model.joblib
 Saved metrics: ...\data\model_metrics.json
 Reminder     : these scores describe synthetic data, not a real process.
 ```
 
-This fits a random forest, scores it on a held-out split **and** with 5-fold
-cross-validation, then saves two files:
+The data is split **three** ways. The model trains on the first split; the second
+is used only to calibrate the prediction interval and is never trained on; every
+reported score comes from the third.
+
+Two files are saved, both gitignored so a fresh clone runs Steps 4 and 5 itself:
 
 - `data/recovery_model.joblib` — the fitted model the dashboard loads
-- `data/model_metrics.json` — scores and feature importances the dashboard displays
+- `data/model_metrics.json` — scores, both kinds of feature importance, the
+  baseline ladder, and the conformal quantile
 
-Both are gitignored, so anyone cloning fresh runs Steps 4 and 5 themselves.
+Three things in that output are worth pausing on:
 
-> **Read the metrics critically.** `Top drivers` lists methane fraction and CO₂ first
-> because those carry the largest coefficients in the generating formula. The model
-> recovered the formula we gave it. That is the expected result, not a discovery.
+> **1. The simplest model wins.** Linear regression beats the random forest, and the
+> run tells you so. That is not a bug — the target was generated from a nearly linear
+> formula, so a linear model is close to the *true* model. Reaching for a forest and
+> never checking is the most common self-inflicted wound in applied ML; the ladder is
+> here so this repo cannot commit it silently. Retrain with `--model linear` and R²
+> rises to about 0.78 while the interval *narrows* to ±0.049.
+>
+> **2. `Mean (no model)` is the floor.** It scores ≈ 0 by construction. Anything that
+> cannot beat it has learned nothing at all.
+>
+> **3. `Top drivers` is a rediscovery, not a discovery.** Methane fraction and CO₂ lead
+> because they carry the largest coefficients in the formula we wrote.
 
 ### Step 6 — Run the tests
 
@@ -239,7 +271,7 @@ python -m pytest
 Expected output:
 
 ```
-94 passed
+128 passed
 ```
 
 The tests build their own small dataset and model in a temporary directory, so they pass
@@ -288,8 +320,13 @@ guess sits from the model's.
 | **Overview** | The full calculated balance, where the recovery fraction came from, and a CSV download of the current operating point |
 | **Scenarios** | The four end-use options ranked by score, with the leader emphasised and the score broken into its terms |
 | **Sensitivity** | Sweep any single input and watch the model's prediction respond; plus what recovery fraction is worth in energy and CO₂ |
-| **Model & data** | Held-out and cross-validated scores, feature importances, and the underlying dataset with column statistics |
+| **Model & data** | The baseline ladder, interval coverage, *both* kinds of feature importance, and the dataset with column statistics |
 | **How this works** | The pipeline in six steps, and an explicit list of what the demo cannot tell you |
+
+The **recovery fraction** KPI carries a 90% conformal interval whenever the model is
+driving it. The interval is calibrated on data the model never trained on, and it holds
+without assuming the errors are normally distributed — but only while new inputs
+resemble the training data.
 
 **Educational flags** appear above the tabs when an input crosses a teaching threshold —
 elevated H₂S, high pressure, high CO₂, or lean gas. They are prompts to think about what
@@ -314,23 +351,34 @@ ChemZero-AI/
 │   ├── process_model.py        # simplified mass & energy balance
 │   ├── safety_constraints.py   # educational input screening
 │   ├── optimization.py         # scenario scoring and ranking
+│   ├── baselines.py            # baseline ladder: is the complexity worth it?
 │   ├── train_model.py          # model training, evaluation, export
+│   ├── uncertainty.py          # split conformal prediction intervals
 │   ├── predict.py              # model loading and prediction
 │   └── viz.py                  # Altair chart builders
 ├── tests/
 │   ├── conftest.py             # shared fixtures (own dataset + model, no shared state)
+│   ├── test_baselines.py
 │   ├── test_generate_data.py
 │   ├── test_optimization.py
 │   ├── test_process_model.py
 │   ├── test_safety_constraints.py
-│   └── test_train_and_predict.py
+│   ├── test_train_and_predict.py
+│   └── test_uncertainty.py
 ├── pyproject.toml              # project metadata + pytest configuration
 ├── requirements.txt
+├── LICENSE                     # MIT, plus an educational-use disclaimer
 └── README.md
 ```
 
 `src/config.py` is the single source of truth for column names and file paths, so the
 generator, trainer, predictor, and dashboard can never silently disagree about them.
+
+It is also where the physical constants live, each stated **on the same reference
+basis** (0 °C, 101.325 kPa) and shown with its derivation. Mixing bases is a classic
+quiet error: this repo previously paired a 0 °C heating value with a CO₂ factor of
+1.90 kg/Nm³, which matches no standard condition and was 3.2% low against the
+stoichiometric 1.963 kg/Nm³.
 
 ---
 
@@ -353,10 +401,14 @@ Both scripts work as a path or as a module (`python -m src.generate_data`).
 | `--data` | `data/synthetic_process_data.csv` | Input CSV |
 | `--model-out` | `data/recovery_model.joblib` | Where to save the fitted model |
 | `--metrics-out` | `data/model_metrics.json` | Where to save scores and importances |
-| `--n-estimators` | `200` | Number of trees in the forest |
-| `--min-samples-leaf` | `3` | Minimum samples per leaf |
-| `--test-size` | `0.2` | Held-out fraction |
+| `--model` | `rf` | Estimator: `rf`, `linear`, or `ridge` |
+| `--n-estimators` | `200` | Number of trees (forest only) |
+| `--min-samples-leaf` | `3` | Minimum samples per leaf (forest only) |
+| `--test-size` | `0.2` | Held-out test fraction |
+| `--calibration-size` | `0.2` | Fraction of non-test data reserved for the conformal interval (`0` disables it) |
+| `--alpha` | `0.1` | Conformal miscoverage rate; `0.1` gives a 90% interval |
 | `--cv-folds` | `5` | Cross-validation folds (`0` skips CV) |
+| `--skip-baselines` | off | Skip the baseline ladder (the slow part) |
 | `--seed` | `42` | Random seed |
 
 Example — a larger forest on a bigger dataset:
@@ -364,6 +416,12 @@ Example — a larger forest on a bigger dataset:
 ```bash
 python src/generate_data.py --rows 10000 --seed 1
 python src/train_model.py --n-estimators 500 --test-size 0.25
+```
+
+Example — take the ladder's advice, and ask for a 95% interval:
+
+```bash
+python src/train_model.py --model linear --alpha 0.05
 ```
 
 ---
@@ -385,12 +443,26 @@ These are the edits that teach the most, roughly in order of difficulty.
    residual wiggle is the forest fitting noise, which is itself worth noticing: an
    unimportant variable rarely reads as *exactly* zero. This is the clearest
    illustration in the repo that the model only knows what the data contains.
-4. **Change the scenario weights.** Edit `WEIGHTS` in [`src/optimization.py`](src/optimization.py)
+4. **Take the ladder's advice.** Retrain with `--model linear` and watch three things
+   improve at once: R² rises (0.74 → 0.78), the conformal interval narrows
+   (±0.056 → ±0.049), and the model becomes eight coefficients you can read. Simpler
+   was better on every axis.
+5. **Read the two importance columns against each other.** In the Model & data tab,
+   compare permutation against the forest's built-in impurity importance. Impurity
+   gives non-zero credit to flow, temperature, and power price — none of which appear
+   in the generating formula. Permutation puts them at zero. You know which is right
+   because you have the formula; in real work you never do, which is the point.
+6. **Push the model outside what it has seen.** Set methane fraction to its extreme
+   and watch the interval *not* widen. Conformal coverage assumes new inputs resemble
+   the calibration data; when they stop, the guarantee lapses silently. That failure
+   mode is the single most important thing on this page.
+7. **Change the scenario weights.** Edit `WEIGHTS` in [`src/optimization.py`](src/optimization.py)
    and reload. Lower the capex penalty and watch the capital-heavy options climb.
-5. **Change the physics.** The correlation lives in `generate_synthetic_data()` in
+8. **Change the physics.** The correlation lives in `generate_synthetic_data()` in
    [`src/generate_data.py`](src/generate_data.py). Make pressure matter more, regenerate,
-   retrain, and confirm the feature importances move.
-6. **Add a feature.** Add a column to the generator, list it in `FEATURES` in
+   retrain, and confirm the feature importances move. Add a genuine interaction term and
+   watch the random forest finally overtake linear regression.
+9. **Add a feature.** Add a column to the generator, list it in `FEATURES` in
    [`src/config.py`](src/config.py), add a slider in the app, regenerate and retrain.
    The config module means those are the only places you need to touch.
 
@@ -429,6 +501,9 @@ Stated plainly, because a polished dashboard invites more trust than this model 
   limits from any standard, code, or datasheet. Real screening means HAZOP/LOPA,
   applicable codes, and qualified engineering review.
 - **Sensitivity is one-at-a-time.** Interactions between variables are ignored entirely.
+- **The interval is conditional.** Conformal coverage holds while new inputs resemble
+  the calibration data. Push the sliders somewhere the training data never went and the
+  guarantee lapses — without the interval widening to warn you.
 
 ---
 
@@ -443,6 +518,12 @@ Stated plainly, because a polished dashboard invites more trust than this model 
 7. Digital-twin concepts — validated models tied to real plant data
 
 ---
+
+## License
+
+MIT — see [LICENSE](LICENSE). The license carries an additional notice: the warranty
+disclaimer applies with particular force to any use of this code in an engineering,
+process-safety, or production context.
 
 ## Important principle
 
