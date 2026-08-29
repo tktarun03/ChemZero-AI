@@ -10,6 +10,12 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
+# Coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
 # Build artifacts
 build/
 dist/
@@ -24,3 +30,7 @@ data/model_metrics.json
 .idea/
 .DS_Store
 Thumbs.db
+
+# Editable install artifacts
+*.egg-info/
+src/*.egg-info/

@@ -1,0 +1,14 @@
+.venv/
+.git/
+.github/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+data/recovery_model.joblib
+data/model_metrics.json
+*.md
+!README.md

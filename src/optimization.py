@@ -13,9 +13,9 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 __all__ = [
+    "MAX_POWER_PRICE_PER_KWH",
     "SCENARIOS",
     "WEIGHTS",
-    "MAX_POWER_PRICE_PER_KWH",
     "Scenario",
     "rank_scenarios",
 ]
@@ -37,9 +37,27 @@ class Scenario(TypedDict):
 
 SCENARIOS: list[Scenario] = [
     {"name": "Flare", "recovery": 0.00, "efficiency": 0.00, "capex": 0.05, "complexity": 0.10},
-    {"name": "Recover / Reuse", "recovery": 0.75, "efficiency": 0.85, "capex": 0.60, "complexity": 0.55},
-    {"name": "Generate Power", "recovery": 0.65, "efficiency": 0.35, "capex": 0.70, "complexity": 0.65},
-    {"name": "Compress / Store", "recovery": 0.70, "efficiency": 0.70, "capex": 0.80, "complexity": 0.75},
+    {
+        "name": "Recover / Reuse",
+        "recovery": 0.75,
+        "efficiency": 0.85,
+        "capex": 0.60,
+        "complexity": 0.55,
+    },
+    {
+        "name": "Generate Power",
+        "recovery": 0.65,
+        "efficiency": 0.35,
+        "capex": 0.70,
+        "complexity": 0.65,
+    },
+    {
+        "name": "Compress / Store",
+        "recovery": 0.70,
+        "efficiency": 0.70,
+        "capex": 0.80,
+        "complexity": 0.75,
+    },
 ]
 
 #: Score weights. Positive terms reward, negative terms penalise. Exposed as a

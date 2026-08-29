@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch: the newest push is the one that matters.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip ruff
+      - name: ruff check
+        run: ruff check --output-format=github .
+      - name: ruff format
+        run: ruff format --check --diff .
+
+  typecheck:
+    name: Type check
+    runs-on: ubuntu-latest
+    # Pinned to one version: numpy's stubs need 3.12+ to parse. Actual version
+    # compatibility is the test matrix's job, not mypy's.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt mypy pandas-stubs
+      - run: mypy
+
+  test:
+    name: Tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt pytest-cov
+
+      # The pipeline must work end to end from a clean checkout, in the order
+      # the README tells a newcomer to run it.
+      - name: Generate the dataset
+        run: python src/generate_data.py
+      - name: Train the model
+        run: python src/train_model.py
+
+      - name: Run the suite with the coverage gate
+        run: python -m pytest --cov --cov-report=term-missing
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: .coverage
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  fresh-clone:
+    name: Fresh clone (no generated data)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+
+      # The suite must pass before anything is generated - a newcomer who runs
+      # pytest first should not see a wall of red.
+      - name: Tests pass with no dataset and no model
+        run: python -m pytest -p no:cacheprovider --no-header -q

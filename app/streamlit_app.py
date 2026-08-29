@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.config import (  # noqa: E402
+from src.config import (
     DATASET_PATH,
     DEFAULT_OPERATING_HOURS_PER_YEAR,
     FEATURE_LABELS,
@@ -29,8 +29,8 @@ from src.config import (  # noqa: E402
     SAFETY_NOTICE,
     TARGET,
 )
-from src.optimization import MAX_POWER_PRICE_PER_KWH, WEIGHTS, rank_scenarios  # noqa: E402
-from src.predict import (  # noqa: E402
+from src.optimization import MAX_POWER_PRICE_PER_KWH, WEIGHTS, rank_scenarios
+from src.predict import (
     ModelNotTrainedError,
     calibration_from_metrics,
     load_metrics,
@@ -38,9 +38,9 @@ from src.predict import (  # noqa: E402
     predict_with_interval,
     sweep_feature,
 )
-from src.process_model import ProcessInput, evaluate_process  # noqa: E402
-from src.safety_constraints import Severity, evaluate_demo_safety  # noqa: E402
-from src.viz import (  # noqa: E402
+from src.process_model import ProcessInput, evaluate_process
+from src.safety_constraints import Severity, evaluate_demo_safety
+from src.viz import (
     emphasis_bar,
     importance_bar,
     scenario_bar,
@@ -190,7 +190,9 @@ ranked = rank_scenarios(recovery, power_price)
 # KPI row
 # --------------------------------------------------------------------------
 
-source_label = "model prediction" if (use_model and predicted_recovery is not None) else "manual input"
+source_label = (
+    "model prediction" if (use_model and predicted_recovery is not None) else "manual input"
+)
 delta = None
 if predicted_recovery is not None and not use_model:
     delta = f"{(manual_recovery - predicted_recovery):+.1%} vs model"
@@ -240,7 +242,11 @@ with overview:
                 ("Recovered gas", f"{result['recovered_gas_nm3_h']:,.0f}", "Nm³/h"),
                 ("Recovered energy", f"{result['recovered_energy_kwh_h']:,.0f}", "kWh/h"),
                 ("Annual recovered gas", f"{result['annual_recovered_gas_nm3']:,.0f}", "Nm³/y"),
-                ("Annual recovered energy", f"{result['annual_recovered_energy_mwh']:,.0f}", "MWh/y"),
+                (
+                    "Annual recovered energy",
+                    f"{result['annual_recovered_energy_mwh']:,.0f}",
+                    "MWh/y",
+                ),
                 ("Illustrative energy value", f"{result['annual_energy_value_usd']:,.0f}", "$/y"),
                 ("Illustrative avoided CO₂", f"{result['estimated_avoided_co2_t_y']:,.0f}", "t/y"),
             ],
@@ -248,7 +254,9 @@ with overview:
         )
         st.dataframe(results_df, hide_index=True, width="stretch")
 
-        export = pd.DataFrame([{**feature_inputs, "recovery_fraction": recovery, **result.as_dict()}])
+        export = pd.DataFrame(
+            [{**feature_inputs, "recovery_fraction": recovery, **result.as_dict()}]
+        )
         st.download_button(
             "Download this operating point (CSV)",
             data=export.to_csv(index=False).encode("utf-8"),
@@ -292,8 +300,18 @@ with scenarios_tab:
 
     st.dataframe(
         pd.DataFrame(ranked)[
-            ["rank", "name", "score", "recovery_fit", "energy_value", "penalty",
-             "recovery", "efficiency", "capex", "complexity"]
+            [
+                "rank",
+                "name",
+                "score",
+                "recovery_fit",
+                "energy_value",
+                "penalty",
+                "recovery",
+                "efficiency",
+                "capex",
+                "complexity",
+            ]
         ],
         hide_index=True,
         width="stretch",
@@ -362,9 +380,7 @@ with sensitivity_tab:
 
     recovery_grid = [i / 40 for i in range(41)]
     outputs = [
-        evaluate_process(
-            ProcessInput(flow, methane, value, operating_hours, power_price)
-        ).as_dict()
+        evaluate_process(ProcessInput(flow, methane, value, operating_hours, power_price)).as_dict()
         for value in recovery_grid
     ]
     value_df = pd.DataFrame(outputs).assign(recovery_fraction=recovery_grid)
@@ -373,16 +389,24 @@ with sensitivity_tab:
     with c_left:
         st.altair_chart(
             sensitivity_line(
-                value_df, "recovery_fraction", "annual_recovered_energy_mwh",
-                "Recovery fraction", "Recovered energy (MWh/y)", theme,
+                value_df,
+                "recovery_fraction",
+                "annual_recovered_energy_mwh",
+                "Recovery fraction",
+                "Recovered energy (MWh/y)",
+                theme,
             ),
             width="stretch",
         )
     with c_right:
         st.altair_chart(
             sensitivity_line(
-                value_df, "recovery_fraction", "estimated_avoided_co2_t_y",
-                "Recovery fraction", "Illustrative avoided CO₂ (t/y)", theme,
+                value_df,
+                "recovery_fraction",
+                "estimated_avoided_co2_t_y",
+                "Recovery fraction",
+                "Illustrative avoided CO₂ (t/y)",
+                theme,
             ),
             width="stretch",
         )
@@ -456,7 +480,7 @@ with model_tab:
             )
             st.caption(
                 "Every candidate is scored the same way, on the same folds. A model "
-                "that cannot beat \"Mean (no model)\" has learned nothing at all."
+                'that cannot beat "Mean (no model)" has learned nothing at all.'
             )
 
         # -- Uncertainty ----------------------------------------------------
@@ -530,7 +554,9 @@ with model_tab:
     if dataset is None:
         st.info("No dataset found. Run `python src/generate_data.py`.", icon="ℹ️")
     else:
-        st.caption(f"{len(dataset):,} rows x {dataset.shape[1]} columns from `{DATASET_PATH.name}`.")
+        st.caption(
+            f"{len(dataset):,} rows x {dataset.shape[1]} columns from `{DATASET_PATH.name}`."
+        )
         st.dataframe(dataset.head(20), hide_index=True, width="stretch")
         with st.expander("Column statistics"):
             st.dataframe(dataset[[*FEATURES, TARGET]].describe().T, width="stretch")

@@ -7,7 +7,7 @@ name = "chemzero-ai"
 version = "0.2.0"
 description = "Educational Chemical Engineering + AI proof of concept"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.2",
     "numpy>=2.0",
@@ -18,7 +18,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pandas-stubs",
+]
 
 [tool.setuptools]
 packages = ["src"]
@@ -31,3 +37,69 @@ testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q --strict-markers"
 filterwarnings = ["error::DeprecationWarning:src.*"]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+# The floor exists so the suite cannot quietly rot as the code grows. Raise it
+# when coverage climbs; never lower it to make a red build go green.
+fail_under = 95
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # import sorting
+    "B",    # bugbear: likely bugs
+    "UP",   # pyupgrade: modern syntax
+    "C4",   # comprehension clarity
+    "SIM",  # simplifiable code
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",    # line length is handled by the formatter
+    "RUF001",  # ambiguous unicode: this repo legitimately uses Nm3, CO2, H2S glyphs
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Both runnable scripts need a sys.path bootstrap before importing from src.
+"src/generate_data.py" = ["E402"]
+"src/train_model.py" = ["E402"]
+"app/streamlit_app.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.mypy]
+# Pinned to 3.12 because numpy's bundled stubs use `type X = ...`, which mypy
+# only parses at 3.12+. Actual version compatibility is enforced by the CI test
+# matrix (3.11 / 3.12 / 3.13), not by this setting.
+python_version = "3.12"
+files = ["src", "tests"]
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+# The dashboard is a Streamlit script, not a module with a typed API; it is
+# checked by running it (see the AppTest-based smoke test), not by mypy.
+exclude = ["^app/"]

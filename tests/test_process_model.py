@@ -7,7 +7,6 @@ import pytest
 from src.config import CO2_KG_PER_NM3_METHANE_COMBUSTED, METHANE_LHV_KWH_PER_NM3
 from src.process_model import ProcessInput, evaluate_process
 
-
 # --- original behaviour, kept as a regression guard -----------------------
 
 
@@ -77,9 +76,7 @@ def test_energy_value_uses_power_price():
     r = evaluate_process(
         ProcessInput(1000, 1.0, 1.0, operating_hours_per_year=1000, power_price_per_kwh=0.10)
     )
-    assert r["annual_energy_value_usd"] == pytest.approx(
-        r["recovered_energy_kwh_h"] * 1000 * 0.10
-    )
+    assert r["annual_energy_value_usd"] == pytest.approx(r["recovered_energy_kwh_h"] * 1000 * 0.10)
 
 
 def test_recovery_scales_output_linearly():

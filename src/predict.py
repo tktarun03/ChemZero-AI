@@ -8,8 +8,9 @@ a regressor has no idea that a recovery fraction is bounded.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import pandas as pd
 
@@ -18,12 +19,12 @@ from src.uncertainty import ConformalCalibration, interval_for
 
 __all__ = [
     "ModelNotTrainedError",
-    "load_model",
-    "load_metrics",
     "calibration_from_metrics",
+    "load_metrics",
+    "load_model",
     "predict_recovery",
-    "predict_with_interval",
     "predict_recovery_batch",
+    "predict_with_interval",
     "sweep_feature",
 ]
 
@@ -50,8 +51,7 @@ def load_model(path: Path = MODEL_PATH) -> Any:
     """
     if not path.exists():
         raise ModelNotTrainedError(
-            f"No trained model at {path}. Train one first with: "
-            "python src/train_model.py"
+            f"No trained model at {path}. Train one first with: python src/train_model.py"
         )
 
     import joblib  # imported lazily so `--help` paths stay fast

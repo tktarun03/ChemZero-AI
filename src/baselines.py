@@ -80,9 +80,7 @@ def build_baselines(seed: int = 42) -> dict[str, tuple[object, str]]:
     }
 
 
-def compare_baselines(
-    df: pd.DataFrame, cv_folds: int = 5, seed: int = 42
-) -> list[BaselineScore]:
+def compare_baselines(df: pd.DataFrame, cv_folds: int = 5, seed: int = 42) -> list[BaselineScore]:
     """Cross-validate every candidate on the same data and folds.
 
     Args:

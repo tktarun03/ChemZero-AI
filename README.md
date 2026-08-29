@@ -35,9 +35,11 @@ in one Streamlit dashboard.
 6. [Project structure](#project-structure)
 7. [Command-line reference](#command-line-reference)
 8. [Things to try](#things-to-try)
-9. [Troubleshooting](#troubleshooting)
-10. [What this demo cannot tell you](#what-this-demo-cannot-tell-you)
-11. [Learning path](#learning-path)
+9. [Developing on this repo](#developing-on-this-repo)
+10. [Running with Docker](#running-with-docker)
+11. [Troubleshooting](#troubleshooting)
+12. [What this demo cannot tell you](#what-this-demo-cannot-tell-you)
+13. [Learning path](#learning-path)
 
 ---
 
@@ -55,7 +57,7 @@ in one Streamlit dashboard.
 | Loading the model and predicting on new inputs | [`src/predict.py`](src/predict.py) |
 | Chart builders (single-hue, emphasis, no dual axes) | [`src/viz.py`](src/viz.py) |
 | Interactive dashboard | [`app/streamlit_app.py`](app/streamlit_app.py) |
-| Test suite (128 tests) | [`tests/`](tests/) |
+| Test suite (155 tests, 99% coverage) | [`tests/`](tests/) |
 
 ## How the pieces fit together
 
@@ -99,7 +101,7 @@ demonstration of the workflow, not evidence about any real process.
 
 ## Requirements
 
-- **Python 3.10 or newer** (developed against 3.12)
+- **Python 3.11 or newer** (developed and CI-tested on 3.11, 3.12, and 3.13)
 - About 400 MB of disk space for the virtual environment
 - No GPU, no API keys, no network access after installation
 
@@ -109,7 +111,8 @@ Check your Python version:
 python --version
 ```
 
-If that prints something below 3.10, install a newer Python before continuing.
+If that prints something below 3.11, install a newer Python before continuing.
+pandas, scikit-learn, and numpy all set the floor here, not this project's own code.
 
 ---
 
@@ -271,7 +274,7 @@ python -m pytest
 Expected output:
 
 ```
-128 passed
+155 passed
 ```
 
 The tests build their own small dataset and model in a temporary directory, so they pass
@@ -358,15 +361,23 @@ ChemZero-AI/
 │   └── viz.py                  # Altair chart builders
 ├── tests/
 │   ├── conftest.py             # shared fixtures (own dataset + model, no shared state)
+│   ├── test_app_smoke.py       # runs the dashboard headlessly via AppTest
 │   ├── test_baselines.py
 │   ├── test_generate_data.py
 │   ├── test_optimization.py
 │   ├── test_process_model.py
 │   ├── test_safety_constraints.py
 │   ├── test_train_and_predict.py
-│   └── test_uncertainty.py
-├── pyproject.toml              # project metadata + pytest configuration
-├── requirements.txt
+│   ├── test_uncertainty.py
+│   └── test_viz.py
+├── .github/
+│   ├── workflows/ci.yml        # lint, types, tests on 3.11-3.13, fresh-clone
+│   └── dependabot.yml
+├── .pre-commit-config.yaml     # the same gates, before the commit exists
+├── Dockerfile                  # known-good environment, non-root, health check
+├── pyproject.toml              # metadata + pytest, ruff, mypy, coverage config
+├── requirements.txt            # what the project needs
+├── constraints.txt             # exact pins that are known to work together
 ├── LICENSE                     # MIT, plus an educational-use disclaimer
 └── README.md
 ```
@@ -468,6 +479,73 @@ These are the edits that teach the most, roughly in order of difficulty.
 
 ---
 
+## Developing on this repo
+
+Four gates run on every push and pull request via
+[GitHub Actions](.github/workflows/ci.yml). All four run locally with the same
+commands, so nothing should ever fail first in CI.
+
+Install the development tools:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+| Gate | Command | What it enforces |
+| --- | --- | --- |
+| Lint | `ruff check .` | Import order, likely bugs, modern syntax |
+| Format | `ruff format .` | One formatting style, not negotiable per file |
+| Types | `mypy` | Type errors across `src/` and `tests/` |
+| Tests | `pytest --cov` | 155 tests **and** a 95% coverage floor |
+
+The coverage floor is a ratchet: raise it when coverage climbs, never lower it
+to turn a red build green. If a change drops coverage, the fix is a test.
+
+CI runs the suite on Python 3.11, 3.12, and 3.13. Two jobs are worth knowing
+about:
+
+- **`test`** runs the pipeline end to end from a clean checkout — generate,
+  train, then test — in the order this README tells a newcomer to run it. If the
+  documented steps break, CI fails.
+- **`fresh-clone`** runs the suite with *no* dataset and *no* model present,
+  because someone who clones the repo and types `pytest` first should not see a
+  wall of red.
+
+To catch all of this before a commit exists:
+
+```bash
+python -m pip install pre-commit
+pre-commit install
+```
+
+### Reproducible installs
+
+`requirements.txt` says what the project needs; `constraints.txt` pins exactly
+what was last known to work together:
+
+```bash
+python -m pip install -r requirements.txt -c constraints.txt
+```
+
+Those pins are Python 3.12-specific — numpy 2.5 requires 3.12+. CI deliberately
+installs *without* them so each Python in the matrix resolves what it actually
+supports.
+
+## Running with Docker
+
+The image generates the dataset and trains the model at build time, so the
+container starts with a working dashboard rather than an empty one:
+
+```bash
+docker build -t chemzero-ai .
+docker run --rm -p 8501:8501 chemzero-ai
+```
+
+Then open **http://localhost:8501**. It runs as a non-root user and exposes a
+health check on `/_stcore/health`.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
@@ -480,6 +558,8 @@ These are the edits that teach the most, roughly in order of difficulty.
 | PowerShell: *"running scripts is disabled on this system"* | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then activate again. Applies to that window only. |
 | Port 8501 already in use | `streamlit run app/streamlit_app.py --server.port 8502` |
 | Dashboard shows stale numbers after you retrain | Streamlit caches the model per session. Press `R` in the browser, or use "Clear cache" in the ⋮ menu. |
+| `ImportError: cannot import name ... from 'src.config'` while the app is running | Streamlit hot-reloads the script but keeps imported modules cached, so a *newly added* name in `src/` is not picked up. Stop the server (`Ctrl+C`) and start it again. |
+| `ruff format` wants to change files you did not touch | Run `ruff format .` once and commit the result; the formatter is the source of truth, not a suggestion. |
 | `UnicodeEncodeError` when printing on Windows | The console codepage cannot render `³`/`₂`. Use `set PYTHONIOENCODING=utf-8` before the command. Does not affect the dashboard. |
 
 ---

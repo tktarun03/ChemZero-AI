@@ -15,7 +15,6 @@ from src.safety_constraints import (
     evaluate_demo_safety,
 )
 
-
 # --- rejection of impossible inputs --------------------------------------
 
 

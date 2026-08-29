@@ -26,7 +26,7 @@ import pandas as pd
 if __package__ in (None, ""):  # pragma: no cover - import bootstrap
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import DATASET_PATH, FEATURES, TARGET  # noqa: E402
+from src.config import DATASET_PATH, FEATURES, TARGET
 
 __all__ = ["generate_synthetic_data", "main"]
 
@@ -96,9 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--rows", type=int, default=DEFAULT_ROWS, help="rows to generate")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="random seed")
-    parser.add_argument(
-        "--out", type=Path, default=DATASET_PATH, help="output CSV path"
-    )
+    parser.add_argument("--out", type=Path, default=DATASET_PATH, help="output CSV path")
     args = parser.parse_args(argv)
 
     df = generate_synthetic_data(args.rows, args.seed)

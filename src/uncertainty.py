@@ -29,7 +29,7 @@ import pandas as pd
 
 from src.config import FEATURES
 
-__all__ = ["ConformalCalibration", "calibrate", "interval_for", "empirical_coverage"]
+__all__ = ["ConformalCalibration", "calibrate", "empirical_coverage", "interval_for"]
 
 
 @dataclass(frozen=True)
@@ -102,9 +102,7 @@ def calibrate(
     rank = min(rank, n)
     quantile = float(np.sort(residuals)[rank - 1])
 
-    return ConformalCalibration(
-        quantile=round(quantile, 6), alpha=alpha, n_calibration=n
-    )
+    return ConformalCalibration(quantile=round(quantile, 6), alpha=alpha, n_calibration=n)
 
 
 def interval_for(

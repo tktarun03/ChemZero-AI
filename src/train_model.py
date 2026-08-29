@@ -29,7 +29,7 @@ import argparse
 import json
 import sys
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -47,19 +47,19 @@ from sklearn.preprocessing import StandardScaler
 if __package__ in (None, ""):  # pragma: no cover - import bootstrap
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.baselines import compare_baselines  # noqa: E402
-from src.config import DATASET_PATH, FEATURES, METRICS_PATH, MODEL_PATH, TARGET  # noqa: E402
-from src.uncertainty import calibrate, empirical_coverage  # noqa: E402
+from src.baselines import compare_baselines
+from src.config import DATASET_PATH, FEATURES, METRICS_PATH, MODEL_PATH, TARGET
+from src.uncertainty import calibrate, empirical_coverage
 
 __all__ = [
-    "TrainingMetrics",
-    "MissingColumnsError",
     "MODEL_KINDS",
-    "load_dataset",
-    "build_model",
+    "MissingColumnsError",
+    "TrainingMetrics",
     "build_estimator",
-    "train_and_evaluate",
+    "build_model",
+    "load_dataset",
     "main",
+    "train_and_evaluate",
 ]
 
 DEFAULT_N_ESTIMATORS = 200
@@ -117,8 +117,7 @@ def load_dataset(path: Path = DATASET_PATH) -> pd.DataFrame:
     """
     if not path.exists():
         raise FileNotFoundError(
-            f"Dataset not found at {path}. Generate it first with: "
-            "python src/generate_data.py"
+            f"Dataset not found at {path}. Generate it first with: python src/generate_data.py"
         )
 
     df = pd.read_csv(path)
@@ -248,7 +247,9 @@ def train_and_evaluate(
     permutation_importances = {
         name: round(float(value), 4)
         for name, value in sorted(
-            zip(FEATURES, perm.importances_mean), key=lambda pair: pair[1], reverse=True
+            zip(FEATURES, perm.importances_mean, strict=True),
+            key=lambda pair: pair[1],
+            reverse=True,
         )
     }
 
@@ -257,7 +258,7 @@ def train_and_evaluate(
         impurity_importances = {
             name: round(float(value), 4)
             for name, value in sorted(
-                zip(FEATURES, model.feature_importances_),
+                zip(FEATURES, model.feature_importances_, strict=True),
                 key=lambda pair: pair[1],
                 reverse=True,
             )
@@ -285,9 +286,9 @@ def train_and_evaluate(
         r2=round(float(r2_score(y_test, pred)), 4),
         cv_r2_mean=round(cv_mean, 4),
         cv_r2_std=round(cv_std, 4),
-        n_train=int(len(X_train)),
-        n_calibration=int(len(X_cal)) if X_cal is not None else 0,
-        n_test=int(len(X_test)),
+        n_train=len(X_train),
+        n_calibration=len(X_cal) if X_cal is not None else 0,
+        n_test=len(X_test),
         n_estimators=n_estimators,
         min_samples_leaf=min_samples_leaf,
         test_size=test_size,
@@ -296,7 +297,7 @@ def train_and_evaluate(
         impurity_importances=impurity_importances,
         baselines=baselines,
         conformal=conformal,
-        trained_at_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        trained_at_utc=datetime.now(UTC).isoformat(timespec="seconds"),
     )
     return model, metrics
 
@@ -312,8 +313,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-samples-leaf", type=int, default=DEFAULT_MIN_SAMPLES_LEAF)
     parser.add_argument("--test-size", type=float, default=DEFAULT_TEST_SIZE)
     parser.add_argument("--calibration-size", type=float, default=DEFAULT_CALIBRATION_SIZE)
-    parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA,
-                        help="conformal miscoverage rate (0.1 = 90%% interval)")
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=DEFAULT_ALPHA,
+        help="conformal miscoverage rate (0.1 = 90%% interval)",
+    )
     parser.add_argument("--cv-folds", type=int, default=DEFAULT_CV_FOLDS)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--skip-baselines", action="store_true", help="skip the baseline ladder")
@@ -367,7 +372,9 @@ def main(argv: list[str] | None = None) -> int:
         best = metrics.baselines[0]["name"]
         for row in metrics.baselines:
             marker = "  <-- best" if row["name"] == best else ""
-            print(f"  {row['name']:<20s} {row['cv_r2_mean']:+.4f} +/- {row['cv_r2_std']:.4f}{marker}")
+            print(
+                f"  {row['name']:<20s} {row['cv_r2_mean']:+.4f} +/- {row['cv_r2_std']:.4f}{marker}"
+            )
         if best != "Random forest" and metrics.model_kind == "rf":
             print(
                 f"\n  NOTE: '{best}' scores higher than the random forest you just "

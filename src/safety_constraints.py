@@ -10,14 +10,14 @@ HAZOP/LOPA, applicable codes, and qualified engineering review.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 __all__ = [
-    "Severity",
     "Flag",
     "SafetyAssessment",
-    "evaluate_demo_safety",
+    "Severity",
     "assess_demo_constraints",
+    "evaluate_demo_safety",
 ]
 
 VALID_MESSAGE = (
@@ -26,7 +26,7 @@ VALID_MESSAGE = (
 )
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     """Teaching-flag severity. Ordered least to most attention-worthy."""
 
     INFO = "info"

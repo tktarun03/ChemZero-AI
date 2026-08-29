@@ -19,21 +19,28 @@ viewers too. Both light and dark steps are chosen for their own surface.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import altair as alt
 import pandas as pd
 
+#: What ``alt.layer()`` is declared to return. Every builder here layers marks,
+#: so this is the honest return type - none of them facet, but narrowing it to
+#: LayerChart would assert something Altair's own types do not promise.
+LayeredChart = alt.LayerChart | alt.FacetChart
+
 __all__ = [
-    "Theme",
-    "LIGHT",
     "DARK",
-    "theme_for",
-    "sensitivity_line",
+    "LIGHT",
+    "LayeredChart",
+    "Theme",
+    "emphasis_bar",
     "importance_bar",
     "scenario_bar",
-    "emphasis_bar",
+    "sensitivity_line",
+    "theme_for",
 ]
 
 
@@ -73,7 +80,7 @@ def theme_for(is_dark: bool) -> Theme:
     return DARK if is_dark else LIGHT
 
 
-def _style(chart: alt.Chart, theme: Theme) -> alt.Chart:
+def _style(chart: LayeredChart, theme: Theme) -> LayeredChart:
     """Apply the shared chrome: hairline solid grid, muted labels, no border."""
     return (
         chart.configure_axis(
@@ -102,7 +109,7 @@ def sensitivity_line(
     theme: Theme,
     y_format: str = ",.0f",
     height: int = 240,
-) -> alt.Chart:
+) -> LayeredChart:
     """A single-series line with a hover crosshair.
 
     One series, so no legend: the axis title names the measure.
@@ -152,7 +159,7 @@ def importance_bar(
     labels: Mapping[str, str],
     theme: Theme,
     height: int = 260,
-) -> alt.Chart:
+) -> LayeredChart:
     """Horizontal bars for feature importance.
 
     Features are nominal, so every bar takes the same hue - the length already
@@ -203,7 +210,7 @@ def emphasis_bar(
     theme: Theme,
     value_format: str = ".3f",
     height: int = 200,
-) -> alt.Chart:
+) -> LayeredChart:
     """Horizontal bars with exactly one bar emphasised.
 
     The emphasis form: the leader carries the accent hue and everything else
@@ -245,9 +252,9 @@ def emphasis_bar(
         ],
     )
     # Negative bars need their label on the other side, or it overlaps the axis.
-    text = base.mark_text(
-        align="left", dx=6, color=theme.text_muted, fontSize=11
-    ).encode(text=alt.Text("value:Q", format=value_format))
+    text = base.mark_text(align="left", dx=6, color=theme.text_muted, fontSize=11).encode(
+        text=alt.Text("value:Q", format=value_format)
+    )
 
     return _style(alt.layer(bars, text).properties(height=height, width="container"), theme)
 
@@ -256,7 +263,7 @@ def scenario_bar(
     ranked: Sequence[Mapping[str, Any]],
     theme: Theme,
     height: int = 200,
-) -> alt.Chart:
+) -> LayeredChart:
     """Horizontal bars for scenario scores, with the leader emphasised.
 
     The top-ranked scenario carries the accent hue and the rest recede to grey -
@@ -270,9 +277,7 @@ def scenario_bar(
     Returns:
         A configured Altair chart.
     """
-    leader = next(
-        (i for i, row in enumerate(ranked) if row.get("rank") == 1), 0
-    )
+    leader = next((i for i, row in enumerate(ranked) if row.get("rank") == 1), 0)
     return emphasis_bar(
         labels=[row["name"] for row in ranked],
         values=[row["score"] for row in ranked],

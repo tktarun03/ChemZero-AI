@@ -17,11 +17,11 @@ from src.config import (
 )
 
 __all__ = [
+    "CO2_KG_PER_NM3_METHANE_COMBUSTED",
+    "METHANE_LHV_KWH_PER_NM3",
     "ProcessInput",
     "ProcessResult",
     "evaluate_process",
-    "METHANE_LHV_KWH_PER_NM3",
-    "CO2_KG_PER_NM3_METHANE_COMBUSTED",
 ]
 
 

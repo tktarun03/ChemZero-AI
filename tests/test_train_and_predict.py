@@ -8,8 +8,7 @@ import joblib
 import pandas as pd
 import pytest
 
-from src.config import FEATURES, FEATURES_NOT_IN_TARGET
-from src.config import TARGET
+from src.config import FEATURES, FEATURES_NOT_IN_TARGET, TARGET
 from src.predict import (
     ModelNotTrainedError,
     calibration_from_metrics,
@@ -20,9 +19,14 @@ from src.predict import (
     predict_with_interval,
     sweep_feature,
 )
+from src.train_model import (
+    MissingColumnsError,
+    build_estimator,
+    load_dataset,
+    main,
+    train_and_evaluate,
+)
 from src.uncertainty import calibrate
-from src.train_model import MissingColumnsError, load_dataset, main, train_and_evaluate
-
 
 # --- training ------------------------------------------------------------
 
@@ -64,7 +68,7 @@ def test_permutation_importances_cover_every_feature(trained):
 def test_methane_is_a_top_driver(trained):
     """The generator gives methane the biggest coefficient; the model should see it."""
     _, metrics = trained
-    assert list(metrics.permutation_importances)[0] == "methane_fraction"
+    assert next(iter(metrics.permutation_importances)) == "methane_fraction"
 
 
 def test_permutation_scores_absent_features_near_zero(trained):
@@ -80,9 +84,7 @@ def test_permutation_scores_absent_features_near_zero(trained):
 
 def test_linear_model_has_no_impurity_importances(sample_df):
     """Only tree models expose feature_importances_; the field stays empty."""
-    _, metrics = train_and_evaluate(
-        sample_df, model_kind="linear", cv_folds=0, run_baselines=False
-    )
+    _, metrics = train_and_evaluate(sample_df, model_kind="linear", cv_folds=0, run_baselines=False)
     assert metrics.impurity_importances == {}
     assert set(metrics.permutation_importances) == set(FEATURES)
 
@@ -230,14 +232,21 @@ def test_cli_writes_model_and_metrics(tmp_path, sample_df):
     sample_df.to_csv(data, index=False)
     model_out, metrics_out = tmp_path / "m.joblib", tmp_path / "m.json"
 
-    exit_code = main([
-        "--data", str(data),
-        "--model-out", str(model_out),
-        "--metrics-out", str(metrics_out),
-        "--n-estimators", "10",
-        "--cv-folds", "0",
-        "--skip-baselines",
-    ])
+    exit_code = main(
+        [
+            "--data",
+            str(data),
+            "--model-out",
+            str(model_out),
+            "--metrics-out",
+            str(metrics_out),
+            "--n-estimators",
+            "10",
+            "--cv-folds",
+            "0",
+            "--skip-baselines",
+        ]
+    )
 
     assert exit_code == 0
     assert model_out.exists()
@@ -269,14 +278,21 @@ def test_calibration_round_trips_through_metrics(tmp_path, sample_df):
     sample_df.to_csv(data, index=False)
     metrics_out = tmp_path / "m.json"
 
-    main([
-        "--data", str(data),
-        "--model-out", str(tmp_path / "m.joblib"),
-        "--metrics-out", str(metrics_out),
-        "--n-estimators", "10",
-        "--cv-folds", "0",
-        "--skip-baselines",
-    ])
+    main(
+        [
+            "--data",
+            str(data),
+            "--model-out",
+            str(tmp_path / "m.joblib"),
+            "--metrics-out",
+            str(metrics_out),
+            "--n-estimators",
+            "10",
+            "--cv-folds",
+            "0",
+            "--skip-baselines",
+        ]
+    )
 
     calibration = calibration_from_metrics(load_metrics(metrics_out))
     assert calibration is not None
@@ -293,6 +309,7 @@ def test_no_calibration_block_yields_no_interval(model, base_inputs):
 def test_interval_brackets_the_prediction(model, base_inputs, sample_df):
     calibration = calibrate(model, sample_df.head(60), sample_df[TARGET].head(60))
     prediction, low, high = predict_with_interval(model, base_inputs, calibration)
+    assert low is not None and high is not None
     assert low <= prediction <= high
 
 
@@ -300,3 +317,55 @@ def test_calibration_from_metrics_handles_missing_input():
     assert calibration_from_metrics(None) is None
     assert calibration_from_metrics({}) is None
     assert calibration_from_metrics({"conformal": {}}) is None
+
+
+# --- estimator selection and optional stages -----------------------------
+
+
+@pytest.mark.parametrize("kind", ["rf", "linear", "ridge"])
+def test_build_estimator_accepts_every_declared_kind(kind):
+    assert build_estimator(kind) is not None
+
+
+def test_build_estimator_rejects_an_unknown_kind():
+    with pytest.raises(ValueError, match="Unknown model kind"):
+        build_estimator("gradient_boosted_wishful_thinking")
+
+
+def test_calibration_can_be_disabled(sample_df):
+    """--calibration-size 0 trades the interval for more training data."""
+    _, metrics = train_and_evaluate(
+        sample_df, calibration_size=0, cv_folds=0, run_baselines=False, n_estimators=10
+    )
+    assert metrics.conformal == {}
+    assert metrics.n_calibration == 0
+    assert metrics.n_train + metrics.n_test == 300
+
+
+def test_cli_prints_the_baseline_ladder(tmp_path, sample_df, capsys):
+    """The ladder is the point of the run; it must reach stdout."""
+    data = tmp_path / "data.csv"
+    sample_df.to_csv(data, index=False)
+
+    exit_code = main(
+        [
+            "--data",
+            str(data),
+            "--model-out",
+            str(tmp_path / "m.joblib"),
+            "--metrics-out",
+            str(tmp_path / "m.json"),
+            "--n-estimators",
+            "10",
+            "--cv-folds",
+            "2",
+        ]
+    )
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Baseline ladder" in out
+    assert "Linear regression" in out
+    assert "Mean (no model)" in out
+    # On this data linear wins, so the run must say so and name the flag.
+    assert "--model linear" in out
