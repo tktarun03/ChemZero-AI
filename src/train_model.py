@@ -224,6 +224,15 @@ def train_and_evaluate(
 
     model = build_estimator(model_kind, n_estimators, min_samples_leaf, seed)
     model.fit(X_train, y_train)
+
+    # Fitting benefits from every core; predicting does not. On a single row the
+    # thread-pool overhead costs more than the work, and summing tree outputs in
+    # a nondeterministic order makes repeated calls differ in the last bit.
+    # Serialising the fitted model makes prediction both faster and exactly
+    # reproducible - which is what the dashboard and the tests rely on.
+    if hasattr(model, "n_jobs"):
+        model.n_jobs = 1
+
     pred = model.predict(X_test)
 
     # Cross-validation gives a stability read the single split cannot: a wide

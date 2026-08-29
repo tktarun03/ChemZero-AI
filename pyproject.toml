@@ -36,7 +36,13 @@ minversion = "8.0"
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q --strict-markers"
-filterwarnings = ["error::DeprecationWarning:src.*"]
+filterwarnings = [
+    # Our own deprecations are errors: we should never ship one unnoticed.
+    "error::DeprecationWarning:src.*",
+    # joblib 1.5 sets .shape on numpy arrays, which numpy 2.5 deprecated. It is
+    # upstream's to fix, and 600+ repeats of it bury warnings that matter.
+    "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["src"]

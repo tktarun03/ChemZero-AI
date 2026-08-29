@@ -90,19 +90,37 @@ def test_linear_model_has_no_impurity_importances(sample_df):
 
 
 def test_training_is_reproducible(sample_df):
-    """Same seed, same predictions.
+    """Same seed, same predictions - bit for bit.
 
-    Compared with a tolerance rather than exactly: the forest trains across
-    threads, so the order floats are summed in can differ by the last bit.
+    Exact equality is the right assertion because training serialises the
+    fitted model (n_jobs=1). Parallel prediction sums tree outputs in a
+    nondeterministic order and would only match to within a tolerance.
     """
-    a, _ = train_and_evaluate(sample_df, n_estimators=10, cv_folds=0)
-    b, _ = train_and_evaluate(sample_df, n_estimators=10, cv_folds=0)
+    a, _ = train_and_evaluate(sample_df, n_estimators=10, cv_folds=0, run_baselines=False)
+    b, _ = train_and_evaluate(sample_df, n_estimators=10, cv_folds=0, run_baselines=False)
     row = sample_df[FEATURES].head(5)
-    assert list(a.predict(row)) == pytest.approx(list(b.predict(row)))
+    assert list(a.predict(row)) == list(b.predict(row))
+
+
+def test_fitted_model_predicts_serially(trained):
+    """Pinning the setting the determinism guarantee rests on.
+
+    Fitting uses every core; predicting must not. If this regresses, repeated
+    predictions start differing in the last bit and the dashboard shows a
+    recovery fraction that flickers between refreshes.
+    """
+    model, _ = trained
+    assert getattr(model, "n_jobs", 1) == 1
+
+
+def test_repeated_predictions_are_identical(model, base_inputs):
+    """The same input must give the same answer every single time."""
+    results = {predict_recovery(model, base_inputs) for _ in range(30)}
+    assert len(results) == 1
 
 
 def test_cross_validation_runs_when_requested(sample_df):
-    _, metrics = train_and_evaluate(sample_df, n_estimators=10, cv_folds=3)
+    _, metrics = train_and_evaluate(sample_df, n_estimators=10, cv_folds=3, run_baselines=False)
     assert metrics.cv_r2_mean == metrics.cv_r2_mean  # not NaN
     assert metrics.cv_r2_std >= 0
 
@@ -130,13 +148,9 @@ def test_prediction_is_a_fraction(model, base_inputs):
 
 
 def test_prediction_ignores_extra_keys(model, base_inputs):
-    """The dashboard passes a superset of the features; that must be fine.
-
-    Predictions are compared with a tolerance throughout: the forest predicts
-    across threads, so two identical calls can differ in the last bit.
-    """
+    """The dashboard passes a superset of the features; that must be fine."""
     noisy = {**base_inputs, "unused_column": 123.0}
-    assert predict_recovery(model, noisy) == pytest.approx(predict_recovery(model, base_inputs))
+    assert predict_recovery(model, noisy) == predict_recovery(model, base_inputs)
 
 
 def test_missing_feature_raises_keyerror(model, base_inputs):
@@ -148,9 +162,7 @@ def test_missing_feature_raises_keyerror(model, base_inputs):
 def test_key_order_does_not_change_the_prediction(model, base_inputs):
     """Columns are matched by position, so order-independence is worth pinning."""
     reversed_inputs = dict(reversed(list(base_inputs.items())))
-    assert predict_recovery(model, reversed_inputs) == pytest.approx(
-        predict_recovery(model, base_inputs)
-    )
+    assert predict_recovery(model, reversed_inputs) == predict_recovery(model, base_inputs)
 
 
 def test_richer_gas_predicts_higher_recovery(model, base_inputs):
@@ -222,9 +234,7 @@ def test_corrupt_metrics_returns_none_rather_than_raising(tmp_path):
 def test_roundtrip_through_disk_preserves_predictions(model, tmp_path, base_inputs):
     path = tmp_path / "model.joblib"
     joblib.dump(model, path)
-    assert predict_recovery(load_model(path), base_inputs) == pytest.approx(
-        predict_recovery(model, base_inputs)
-    )
+    assert predict_recovery(load_model(path), base_inputs) == predict_recovery(model, base_inputs)
 
 
 def test_cli_writes_model_and_metrics(tmp_path, sample_df):
